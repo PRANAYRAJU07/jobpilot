@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: jobpilot_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobpilot_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobpilot_password}
+      POSTGRES_DB: ${POSTGRES_DB:-jobpilot_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobpilot_user -d jobpilot_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: jobpilot_redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    image: jobpilot-ai-backend
+    container_name: jobpilot_backend
+    volumes:
+      - ./apps/backend:/app
+      - ./workers:/app/workers
+      - resume_uploads:/tmp/jobpilot_uploads/resumes
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobpilot_user}:${POSTGRES_PASSWORD:-jobpilot_password}@postgres:5432/${POSTGRES_DB:-jobpilot_db}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET:-super-secret-key-for-dev}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - GMAIL_CLIENT_ID=${GMAIL_CLIENT_ID:-}
+      - GMAIL_CLIENT_SECRET=${GMAIL_CLIENT_SECRET:-}
+      - GMAIL_REDIRECT_URI=${GMAIL_REDIRECT_URI:-http://localhost:8001/api/gmail/callback}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_WHATSAPP_FROM=${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
+      - WHATSAPP_CLOUD_TOKEN=${WHATSAPP_CLOUD_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - CALLMEBOT_API_KEY=${CALLMEBOT_API_KEY:-}
+      - WHATSAPP_WEBHOOK_URL=${WHATSAPP_WEBHOOK_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: jobpilot-ai-backend
+    container_name: jobpilot_worker
+    volumes:
+      - ./apps/backend:/app
+      - ./workers:/app/workers
+      - resume_uploads:/tmp/jobpilot_uploads/resumes
+    command: celery -A workers.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobpilot_user}:${POSTGRES_PASSWORD:-jobpilot_password}@postgres:5432/${POSTGRES_DB:-jobpilot_db}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET:-super-secret-key-for-dev}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_WHATSAPP_FROM=${TWILIO_WHATSAPP_FROM:-whatsapp:+14155238886}
+      - WHATSAPP_CLOUD_TOKEN=${WHATSAPP_CLOUD_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - CALLMEBOT_API_KEY=${CALLMEBOT_API_KEY:-}
+      - WHATSAPP_WEBHOOK_URL=${WHATSAPP_WEBHOOK_URL:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  beat:
+    image: jobpilot-ai-backend
+    container_name: jobpilot_beat
+    volumes:
+      - ./apps/backend:/app
+      - ./workers:/app/workers
+    command: celery -A workers.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobpilot_user}:${POSTGRES_PASSWORD:-jobpilot_password}@postgres:5432/${POSTGRES_DB:-jobpilot_db}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  mock_site:
+    image: jobpilot-ai-backend
+    container_name: jobpilot_mock_site
+    volumes:
+      - ./tests/browser/mock-career-site:/app
+    command: uvicorn mock_app:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+
+  browser_worker:
+    build:
+      context: ./workers/browser-worker
+      dockerfile: Dockerfile
+    container_name: jobpilot_browser_worker
+    volumes:
+      - ./workers/browser-worker:/app
+      - ./apps/backend:/backend
+      - resume_uploads:/tmp/jobpilot_uploads/resumes
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobpilot_user}:${POSTGRES_PASSWORD:-jobpilot_password}@postgres:5432/${POSTGRES_DB:-jobpilot_db}
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/backend
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    container_name: jobpilot_frontend
+    volumes:
+      - ./apps/frontend:/app
+      - /app/node_modules
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8001/api
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  resume_uploads:
