@@ -43,9 +43,15 @@ def startup_event():
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+    origin = request.headers.get("origin")
+    headers = {}
+    if origin:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error", "error": str(exc)},
+        headers=headers,
     )
 
 @app.middleware("http")
@@ -54,8 +60,17 @@ async def add_process_time_header(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as e:
-        logger.error(f"Error in request {request.method} {request.url.path}: {e}")
-        raise e
+        logger.error(f"Error in request {request.method} {request.url.path}: {e}", exc_info=True)
+        origin = request.headers.get("origin")
+        headers = {}
+        if origin:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "error": str(e)},
+            headers=headers,
+        )
     process_time = time.time() - start_time
     logger.info(f"Method: {request.method} Path: {request.url.path} Status: {response.status_code} Time: {process_time:.4f}s")
     response.headers["X-Process-Time"] = str(process_time)
@@ -63,16 +78,18 @@ async def add_process_time_header(request: Request, call_next):
 
 frontend_origins = [
     origin.strip()
-    for origin in os.getenv("FRONTEND_URL", "http://localhost:3001,http://127.0.0.1:3001").split(",")
+    for origin in os.getenv("FRONTEND_URL", "http://localhost:3001,http://127.0.0.1:3001,http://localhost:3000,http://127.0.0.1:3000").split(",")
     if origin.strip()
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=frontend_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(auth_router.router)

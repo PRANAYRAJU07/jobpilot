@@ -10,6 +10,7 @@ from database import get_db
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
+@router.get("")
 @router.get("/")
 def list_jobs(
     status: Optional[str] = None,

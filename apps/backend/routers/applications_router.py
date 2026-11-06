@@ -8,6 +8,7 @@ from database import get_db
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
+@router.get("")
 @router.get("/")
 def list_applications(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     return db.query(models.Application).filter(models.Application.user_id == current_user.id).all()

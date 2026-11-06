@@ -37,9 +37,11 @@ services:
       - resume_uploads:/tmp/jobpilot_uploads/resumes
     ports:
       - "8001:8000"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-jobpilot_user}:${POSTGRES_PASSWORD:-jobpilot_password}@postgres:5432/${POSTGRES_DB:-jobpilot_db}
       - REDIS_URL=redis://redis:6379/0
+      - FRONTEND_URL=http://localhost:3001,http://127.0.0.1:3001,http://localhost:3000,http://127.0.0.1:3000
       - JWT_SECRET=${JWT_SECRET:-super-secret-key-for-dev}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - GMAIL_CLIENT_ID=${GMAIL_CLIENT_ID:-}

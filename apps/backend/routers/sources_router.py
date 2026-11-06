@@ -20,11 +20,13 @@ class SourceCreate(BaseModel):
     tags: Optional[List[str]] = []
 
 
+@router.get("")
 @router.get("/")
 def list_sources(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     return db.query(models.JobSourceRegistry).order_by(models.JobSourceRegistry.company.asc()).all()
 
 
+@router.post("")
 @router.post("/")
 def create_source(
     source_in: SourceCreate,

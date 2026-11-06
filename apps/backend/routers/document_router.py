@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
-from sqlalchemy.orm import Session
 import hashlib
 import os
 import re
+import uuid
+import logging
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from sqlalchemy.orm import Session
 
 import models
 import auth
 from database import get_db
+
+logger = logging.getLogger("jobpilot.document_router")
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -14,6 +18,7 @@ UPLOAD_DIR = os.getenv("RESUME_UPLOAD_DIR", "/tmp/jobpilot_uploads/resumes")
 
 
 @router.post("/upload")
+@router.post("/upload/")
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -49,7 +54,8 @@ async def upload_document(
     try:
         with open(saved_path, "wb") as f_out:
             f_out.write(content)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not persist resume to disk: {e}")
         saved_path = None
 
     existing = db.query(models.Document).filter(
@@ -76,14 +82,29 @@ async def upload_document(
         db.refresh(doc_record)
 
     # Parse resume, learn skills, extract projects & metadata, and populate Evidence Graph
-    from services.document_intelligence import DocumentIntelligenceService
-    doc_service = DocumentIntelligenceService(db)
-    parse_summary = doc_service.parse_and_populate(doc_record, raw_bytes=content)
+    try:
+        from services.document_intelligence import DocumentIntelligenceService
+        doc_service = DocumentIntelligenceService(db)
+        parse_summary = doc_service.parse_and_populate(doc_record, raw_bytes=content)
+    except Exception as e:
+        logger.error(f"Error in document intelligence parse: {e}", exc_info=True)
+        parse_summary = {
+            "skills_learned": [],
+            "skills_count": 0,
+            "projects_extracted": 0,
+            "inferred_domains": ["SOFTWARE_ENGINEERING"],
+            "extracted_metadata": {},
+            "warning": f"Could not parse document structure: {str(e)}"
+        }
 
-    # Immediately cross-validate the freshest 50 jobs for fast UI feedback
-    from services.job_engine import JobEngineService
-    job_engine = JobEngineService(db)
-    rematch_summary = job_engine.re_evaluate_all_jobs_for_profile(profile, send_alerts_for_top=0, limit=50)
+    # Immediately cross-validate freshest jobs for fast UI feedback
+    try:
+        from services.job_engine import JobEngineService
+        job_engine = JobEngineService(db)
+        rematch_summary = job_engine.re_evaluate_all_jobs_for_profile(profile, send_alerts_for_top=0, limit=50)
+    except Exception as e:
+        logger.error(f"Error during initial job rematch: {e}", exc_info=True)
+        rematch_summary = {"evaluated": 0, "matched": 0}
 
     # Background task to evaluate remaining jobs & dispatch alerts without slowing down upload response
     def run_full_evaluation(profile_id: str):
@@ -94,10 +115,8 @@ async def upload_document(
             if bg_profile:
                 bg_engine = JobEngineService(bg_db)
                 bg_engine.re_evaluate_all_jobs_for_profile(bg_profile, send_alerts_for_top=5)
-                bg_engine.re_evaluate_all_jobs_for_profile(bg_profile, send_alerts_for_top=10)
         except Exception as e:
-            import logging
-            logging.getLogger("jobpilot").error(f"Background evaluation error: {e}")
+            logger.error(f"Background evaluation error: {e}", exc_info=True)
         finally:
             bg_db.close()
 
@@ -112,6 +131,7 @@ async def upload_document(
     }
 
 
+@router.get("")
 @router.get("/")
 def list_documents(current_user: models.User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
     profile = db.query(models.CandidateProfile).filter(models.CandidateProfile.user_id == current_user.id).first()
@@ -123,7 +143,20 @@ def list_documents(current_user: models.User = Depends(auth.get_current_user), d
         .order_by(models.Document.upload_timestamp.desc())
         .all()
     )
-    return docs
+    return [
+        {
+            "id": str(d.id),
+            "profile_id": str(d.profile_id),
+            "filename": d.filename,
+            "hash": d.hash,
+            "upload_timestamp": d.upload_timestamp.isoformat() if d.upload_timestamp else None,
+            "document_type": d.document_type,
+            "verification_status": d.verification_status,
+            "file_path": d.file_path,
+            "parsed_metadata": d.parsed_metadata,
+        }
+        for d in docs
+    ]
 
 
 @router.delete("/{document_id}")
@@ -136,8 +169,13 @@ def delete_document(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    try:
+        doc_uuid = uuid.UUID(str(document_id))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+
     doc = db.query(models.Document).filter(
-        models.Document.id == document_id,
+        models.Document.id == doc_uuid,
         models.Document.profile_id == profile.id
     ).first()
     if not doc:
@@ -150,4 +188,4 @@ def delete_document(
 
     db.delete(doc)
     db.commit()
-    return {"status": "DELETED", "document_id": document_id}
+    return {"status": "DELETED", "document_id": str(document_id)}

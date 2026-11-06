@@ -39,6 +39,7 @@ class SkillCreate(BaseModel):
     category: Optional[str] = "Custom"
 
 
+@router.get("")
 @router.get("/")
 def get_profile(current_user: models.User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
     profile = db.query(models.CandidateProfile).filter(models.CandidateProfile.user_id == current_user.id).first()
@@ -58,6 +59,7 @@ def get_profile(current_user: models.User = Depends(auth.get_current_user), db: 
     return profile
 
 
+@router.put("")
 @router.put("/")
 def update_profile(
     profile_data: ProfileUpdate,
@@ -176,14 +178,25 @@ def delete_profile_skill(
 
 
 @router.get("/projects")
+@router.get("/projects/")
 def get_profile_projects(current_user: models.User = Depends(auth.get_current_user), db: Session = Depends(get_db)):
     profile = db.query(models.CandidateProfile).filter(models.CandidateProfile.user_id == current_user.id).first()
     if not profile:
         return []
-    return db.query(models.CandidateProject).filter(models.CandidateProject.profile_id == profile.id).all()
+    projects = db.query(models.CandidateProject).filter(models.CandidateProject.profile_id == profile.id).all()
+    return [
+        {
+            "id": str(p.id),
+            "profile_id": str(p.profile_id),
+            "title": p.title,
+            "description": p.description,
+        }
+        for p in projects
+    ]
 
 
 @router.post("/re-match")
+@router.post("/re-match/")
 def trigger_profile_rematch(
     background_tasks: BackgroundTasks,
     send_alerts: bool = True,
